@@ -1,0 +1,24 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.DS_Store
+*.log
+.pqe_ui_logs/
+
+# Local/generated Excel outputs
+~$*.xlsx
+.~*.xlsx
+*_extracted.xlsx
+*_extracted_optimized.xlsx
+
+# macOS/PyInstaller build outputs
+mac_package/.venv/
+mac_package/build/
+mac_package/dist/
+mac_package/release/
+mac_package/*.app/
+mac_package/*.zip
+
+# Local VS Code settings can stay local if needed
+.vscode/

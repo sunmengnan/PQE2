@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=FAI IPQC Excel Extractor
+Comment=Open the FAI / IPQC Excel extraction desktop app
+Exec=/mnt/data/documents/PQE2/open_fai_extractor_desktop.sh
+Path=/mnt/data/documents/PQE2
+Terminal=false
+Categories=Office;Utility;
+Icon=x-office-spreadsheet
+StartupNotify=true
