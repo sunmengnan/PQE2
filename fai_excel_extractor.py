@@ -409,6 +409,25 @@ def extract_workbook(path: Path, prefix_fai: bool = False) -> Tuple[List[Dict[st
     return records, sheet_counts
 
 
+def diagnose_workbook(path: Path) -> List[str]:
+    """Return short diagnostics for templates that produce no measurement rows."""
+    messages: List[str] = []
+    with ExcelXmlReader(path) as reader:
+        sheet_names = reader.sheet_names()
+        messages.append("Sheets: " + ", ".join(sheet_names))
+        for sheet_name in sheet_names:
+            rows, _ = reader.read_sheet(sheet_name)
+            dim_header = find_dimension_header(rows)
+            date_row = find_row_containing(rows, ["检验", "日期"]) or find_label_row(rows, ["出炉日期", "日期(yymmdd)", "日期"])
+            time_row = find_row_containing(rows, ["检验", "时间"]) or find_label_row(rows, ["出炉时间", "时间(hh:mm)", "时间"])
+            if dim_header or date_row or time_row:
+                messages.append(
+                    "%s: dimension_header=%s, date_row=%s, time_row=%s"
+                    % (sheet_name, dim_header, date_row, time_row)
+                )
+    return messages
+
+
 def export_workbook(records: Sequence[Dict[str, Any]], output_path: Path, include_source_sheet: bool = False) -> None:
     wb = Workbook()
     ws = wb.active

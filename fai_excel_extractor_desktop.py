@@ -14,10 +14,11 @@ from tkinter import END, EXTENDED, BooleanVar, Listbox, StringVar, Tk, filedialo
 import tkinter.font as tkfont
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from fai_excel_extractor import default_output_path, export_workbook, extract_workbook
+from fai_excel_extractor import default_output_path, diagnose_workbook, export_workbook, extract_workbook
 
 
 APP_TITLE = "FAI / IPQC Excel Extractor"
+APP_VERSION = "1.0.2"
 BASE_COLUMNS = ["Date ", "Sampling process", "Sampling time", "Sampling line#/Machine#", "FAI"]
 PREVIEW_LIMIT = 300
 
@@ -100,7 +101,7 @@ def natural_sort_key(value: Any) -> List[Any]:
 class ExtractorApp:
     def __init__(self, root: Tk) -> None:
         self.root = root
-        self.root.title(APP_TITLE)
+        self.root.title("%s v%s" % (APP_TITLE, APP_VERSION))
         self.root.geometry("1180x760")
         self.root.minsize(1020, 680)
         self.root.configure(bg="#EEF4FB")
@@ -161,7 +162,7 @@ class ExtractorApp:
         outer.columnconfigure(0, weight=1)
         outer.rowconfigure(3, weight=1)
 
-        ttk.Label(outer, text=APP_TITLE, style="Title.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(outer, text="%s v%s" % (APP_TITLE, APP_VERSION), style="Title.TLabel").grid(row=0, column=0, sticky="w")
         ttk.Label(outer, text="Extract dimension sampling data from every sheet, then filter and export by date, time, and FAI.", style="SubTitle.TLabel").grid(row=1, column=0, sticky="w", pady=(4, 12))
 
         top = ttk.Frame(outer, style="App.TFrame")
@@ -289,7 +290,9 @@ class ExtractorApp:
         try:
             records, sheet_counts = extract_workbook(input_path, prefix_fai=prefix_fai)
             if not records:
-                self.messages.put(("error", "No valid measurement data was found."))
+                diagnostics = diagnose_workbook(input_path)
+                detail = "No valid measurement data was found.\n\n" + "\n".join(diagnostics[:12])
+                self.messages.put(("error", detail))
                 return
             filtered = self._filter_records(records, filters)
             if not filtered:
