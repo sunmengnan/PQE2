@@ -14,11 +14,11 @@ from tkinter import END, EXTENDED, BooleanVar, Listbox, StringVar, Tk, filedialo
 import tkinter.font as tkfont
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from fai_excel_extractor import default_output_path, diagnose_workbook, export_workbook, extract_workbook
+from fai_excel_extractor import default_multi_output_path, diagnose_workbook, export_workbook, extract_workbooks
 
 
 APP_TITLE = "FAI / IPQC Excel Extractor"
-APP_VERSION = "1.0.2"
+APP_VERSION = "1.0.3"
 BASE_COLUMNS = ["Date ", "Sampling process", "Sampling time", "Sampling line#/Machine#", "FAI"]
 PREVIEW_LIMIT = 300
 
@@ -173,14 +173,14 @@ class ExtractorApp:
         file_card = self._card(top, 0, 0)
         file_card.columnconfigure(1, weight=1)
         ttk.Label(file_card, text="File Settings", style="CardTitle.TLabel").grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 10))
-        ttk.Label(file_card, text="Input Excel", style="Body.TLabel").grid(row=1, column=0, sticky="e", padx=(0, 8), pady=6)
+        ttk.Label(file_card, text="Input Excel(s)", style="Body.TLabel").grid(row=1, column=0, sticky="e", padx=(0, 8), pady=6)
         ttk.Entry(file_card, textvariable=self.input_var).grid(row=1, column=1, sticky="ew", pady=6)
         ttk.Button(file_card, text="Browse", style="Soft.TButton", command=self._browse_input).grid(row=1, column=2, padx=(8, 0), pady=6)
         ttk.Label(file_card, text="Output Excel", style="Body.TLabel").grid(row=2, column=0, sticky="e", padx=(0, 8), pady=6)
         ttk.Entry(file_card, textvariable=self.output_var).grid(row=2, column=1, sticky="ew", pady=6)
         ttk.Button(file_card, text="Save As", style="Soft.TButton", command=self._browse_output).grid(row=2, column=2, padx=(8, 0), pady=6)
         ttk.Checkbutton(file_card, text="Add FAI prefix (4 -> FAI4)", variable=self.prefix_var).grid(row=3, column=1, sticky="w", pady=(8, 0))
-        ttk.Checkbutton(file_card, text="Include Source sheet column", variable=self.source_sheet_var).grid(row=3, column=2, sticky="w", pady=(8, 0))
+        ttk.Checkbutton(file_card, text="Include source file/sheet columns", variable=self.source_sheet_var).grid(row=3, column=2, sticky="w", pady=(8, 0))
 
         filter_card = self._card(top, 0, 1)
         for idx in range(4):
@@ -241,12 +241,12 @@ class ExtractorApp:
         x_scroll.grid(row=1, column=0, sticky="ew")
 
     def _browse_input(self) -> None:
-        path = filedialog.askopenfilename(title="Select Input Excel", filetypes=[("Excel files", "*.xlsx *.xlsm"), ("All files", "*.*")])
-        if not path:
+        paths = filedialog.askopenfilenames(title="Select Input Excel Files", filetypes=[("Excel files", "*.xlsx *.xlsm"), ("All files", "*.*")])
+        if not paths:
             return
-        self.input_var.set(path)
+        self.input_var.set(";".join(paths))
         if not self.output_var.get().strip():
-            self.output_var.set(str(default_output_path(Path(path))))
+            self.output_var.set(str(default_multi_output_path([Path(path) for path in paths])))
 
     def _browse_output(self) -> None:
         initial = self.output_var.get().strip()
@@ -254,10 +254,16 @@ class ExtractorApp:
         if path:
             self.output_var.set(path)
 
-    def _validated_output_path(self) -> Path:
-        input_path = Path(self.input_var.get().strip()).expanduser().resolve()
+    def _input_paths(self) -> List[Path]:
+        text = self.input_var.get().strip()
+        if not text:
+            return []
+        paths = [Path(part.strip()).expanduser().resolve() for part in text.split(";") if part.strip()]
+        return paths
+
+    def _validated_output_path(self, input_paths: Sequence[Path]) -> Path:
         output_text = self.output_var.get().strip()
-        output_path = Path(output_text).expanduser().resolve() if output_text else default_output_path(input_path)
+        output_path = Path(output_text).expanduser().resolve() if output_text else default_multi_output_path(input_paths)
         if output_path.suffix.lower() != ".xlsx":
             output_path = output_path.with_suffix(".xlsx")
         self.output_var.set(str(output_path))
@@ -266,31 +272,34 @@ class ExtractorApp:
     def _start_extract(self) -> None:
         if self.worker and self.worker.is_alive():
             return
-        input_text = self.input_var.get().strip()
-        if not input_text:
-            messagebox.showwarning(APP_TITLE, "Please select an input Excel file first.")
+        input_paths = self._input_paths()
+        if not input_paths:
+            messagebox.showwarning(APP_TITLE, "Please select one or more input Excel files first.")
             return
-        input_path = Path(input_text).expanduser().resolve()
-        if not input_path.exists():
-            messagebox.showerror(APP_TITLE, "Input file does not exist:\n%s" % input_path)
+        missing = [path for path in input_paths if not path.exists()]
+        if missing:
+            messagebox.showerror(APP_TITLE, "Input file does not exist:\n%s" % "\n".join(str(path) for path in missing[:10]))
             return
         try:
-            output_path = self._validated_output_path()
+            output_path = self._validated_output_path(input_paths)
             filters = self._read_filters()
         except ValueError as exc:
             messagebox.showwarning(APP_TITLE, str(exc))
             return
 
         self.extract_button.configure(state="disabled")
-        self.status_var.set("Reading Excel, please wait...")
-        self.worker = threading.Thread(target=self._extract_worker, args=(input_path, output_path, filters, self.prefix_var.get(), self.source_sheet_var.get()), daemon=True)
+        self.status_var.set("Reading %d Excel file(s), please wait..." % len(input_paths))
+        self.worker = threading.Thread(target=self._extract_worker, args=(input_paths, output_path, filters, self.prefix_var.get(), self.source_sheet_var.get()), daemon=True)
         self.worker.start()
 
-    def _extract_worker(self, input_path: Path, output_path: Path, filters: Tuple[Optional[date], Optional[date], Optional[time], Optional[time], List[str], List[str]], prefix_fai: bool, include_source_sheet: bool) -> None:
+    def _extract_worker(self, input_paths: Sequence[Path], output_path: Path, filters: Tuple[Optional[date], Optional[date], Optional[time], Optional[time], List[str], List[str]], prefix_fai: bool, include_source_sheet: bool) -> None:
         try:
-            records, sheet_counts = extract_workbook(input_path, prefix_fai=prefix_fai)
+            records, sheet_counts = extract_workbooks(input_paths, prefix_fai=prefix_fai)
             if not records:
-                diagnostics = diagnose_workbook(input_path)
+                diagnostics: List[str] = []
+                for input_path in input_paths[:5]:
+                    diagnostics.append("File: %s" % input_path.name)
+                    diagnostics.extend(diagnose_workbook(input_path)[:8])
                 detail = "No valid measurement data was found.\n\n" + "\n".join(diagnostics[:12])
                 self.messages.put(("error", detail))
                 return
@@ -390,7 +399,8 @@ class ExtractorApp:
             messagebox.showinfo(APP_TITLE, "No filtered data is available to export.")
             return
         try:
-            output_path = self._validated_output_path()
+            input_paths = self._input_paths()
+            output_path = self._validated_output_path(input_paths)
             export_workbook(self.filtered_records, output_path, include_source_sheet=self.source_sheet_var.get())
         except Exception as exc:  # noqa: BLE001
             messagebox.showerror(APP_TITLE, "Export failed:\n%s" % exc)
@@ -427,6 +437,7 @@ class ExtractorApp:
         records = self.filtered_records
         columns = BASE_COLUMNS + sample_columns(records)
         if self.source_sheet_var.get():
+            columns.append("Source file")
             columns.append("Source sheet")
         self.tree.delete(*self.tree.get_children())
         self.tree["columns"] = columns
@@ -436,7 +447,7 @@ class ExtractorApp:
         for idx, record in enumerate(records[:PREVIEW_LIMIT]):
             values = []
             for col in columns:
-                key = "source_sheet" if col == "Source sheet" else col
+                key = "source_sheet" if col == "Source sheet" else "source_file" if col == "Source file" else col
                 values.append(display_value(record.get(key, "")))
             self.tree.insert("", "end", values=values, tags=("odd" if idx % 2 else "even",))
         self.tree.tag_configure("even", background="#FFFFFF")

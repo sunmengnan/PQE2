@@ -23,10 +23,17 @@
 /home/nordbo/anaconda3/envs/yolov5/bin/python fai_excel_extractor.py input.xlsx -o input_extracted.xlsx
 ```
 
+多个 Excel 合并提取：
+
+```bash
+/home/nordbo/anaconda3/envs/yolov5/bin/python fai_excel_extractor.py input1.xlsx input2.xlsx -o merged_extracted.xlsx --include-source-sheet
+```
+
 可选参数：
 
 - `--prefix-fai`：把 `4` 输出为 `FAI4`。
 - `--include-source-sheet`：额外输出 `Source sheet` 追溯列。
+- 多文件导出时，`--include-source-sheet` 会同时输出 `Source file` 和 `Source sheet`。
 
 ## 图形界面运行
 
@@ -50,6 +57,7 @@ conda run -n yolov5 streamlit run fai_excel_extractor_ui.py
 
 桌面程序支持：
 
+- 点击 `Browse` 可一次选择多个 Excel 文件并合并提取。
 - 按日期范围筛选，例如 `2026-06-01`、`2026/06/01`、`260601`。
 - 按时间范围筛选，例如 `08:00`。
 - 按尺寸 / FAI 包含条件筛选，例如 `4`、`5.1`、`FAI4`。

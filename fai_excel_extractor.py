@@ -404,9 +404,23 @@ def extract_workbook(path: Path, prefix_fai: bool = False) -> Tuple[List[Dict[st
             rows, merges = reader.read_sheet(sheet_name)
             sheet_records = extract_sheet_records(sheet_name, rows, merges, prefix_fai=prefix_fai)
             if sheet_records:
+                for record in sheet_records:
+                    record["source_file"] = path.name
                 records.extend(sheet_records)
                 sheet_counts[sheet_name] = len(sheet_records)
     return records, sheet_counts
+
+
+def extract_workbooks(paths: Sequence[Path], prefix_fai: bool = False) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
+    records: List[Dict[str, Any]] = []
+    counts: Dict[str, int] = {}
+    for path in paths:
+        workbook_records, workbook_counts = extract_workbook(path, prefix_fai=prefix_fai)
+        records.extend(workbook_records)
+        for sheet_name, count in workbook_counts.items():
+            key = "%s / %s" % (path.name, sheet_name)
+            counts[key] = count
+    return records, counts
 
 
 def diagnose_workbook(path: Path) -> List[str]:
@@ -442,6 +456,7 @@ def export_workbook(records: Sequence[Dict[str, Any]], output_path: Path, includ
     columns = list(OUTPUT_BASE_COLUMNS)
     columns.extend("Sample %d" % idx for idx in range(1, max(10, max_samples) + 1))
     if include_source_sheet:
+        columns.append("Source file")
         columns.append("Source sheet")
 
     header_fill = PatternFill("solid", fgColor="D9EAF7")
@@ -457,7 +472,7 @@ def export_workbook(records: Sequence[Dict[str, Any]], output_path: Path, includ
 
     for row_idx, record in enumerate(records, start=2):
         for col_idx, header in enumerate(columns, start=1):
-            key = "source_sheet" if header == "Source sheet" else header
+            key = "source_sheet" if header == "Source sheet" else "source_file" if header == "Source file" else header
             cell = ws.cell(row_idx, col_idx, record.get(key, ""))
             cell.font = body_font
             cell.alignment = center
@@ -478,9 +493,16 @@ def default_output_path(input_path: Path) -> Path:
     return input_path.with_name(input_path.stem + "_extracted.xlsx")
 
 
+def default_multi_output_path(input_paths: Sequence[Path]) -> Path:
+    if len(input_paths) == 1:
+        return default_output_path(input_paths[0])
+    base_dir = input_paths[0].parent if input_paths else Path.cwd()
+    return base_dir / "FAI_IPQC_Excel_Extracted.xlsx"
+
+
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Extract all inspection sheet FAI sampling data to a new Excel file.")
-    parser.add_argument("input", type=Path, help="Input .xlsx/.xlsm inspection workbook")
+    parser.add_argument("input", type=Path, nargs="+", help="One or more input .xlsx/.xlsm inspection workbooks")
     parser.add_argument("-o", "--output", type=Path, help="Output .xlsx path")
     parser.add_argument("--prefix-fai", action="store_true", help="Prefix FAI values with 'FAI' (for example 4 -> FAI4)")
     parser.add_argument("--include-source-sheet", action="store_true", help="Append a Source sheet column for traceability")
@@ -489,15 +511,16 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parse_args(argv)
-    input_path = args.input.expanduser().resolve()
-    output_path = (args.output or default_output_path(input_path)).expanduser().resolve()
-    if not input_path.exists():
-        print("Input file does not exist: %s" % input_path, file=sys.stderr)
-        return 2
+    input_paths = [path.expanduser().resolve() for path in args.input]
+    output_path = (args.output or default_multi_output_path(input_paths)).expanduser().resolve()
+    for input_path in input_paths:
+        if not input_path.exists():
+            print("Input file does not exist: %s" % input_path, file=sys.stderr)
+            return 2
     try:
-        records, sheet_counts = extract_workbook(input_path, prefix_fai=args.prefix_fai)
-    except BadZipFile:
-        print("Input is not a valid .xlsx/.xlsm workbook: %s" % input_path, file=sys.stderr)
+        records, sheet_counts = extract_workbooks(input_paths, prefix_fai=args.prefix_fai)
+    except BadZipFile as exc:
+        print("Input is not a valid .xlsx/.xlsm workbook: %s" % exc, file=sys.stderr)
         return 2
     if not records:
         print("No matching inspection records found.", file=sys.stderr)

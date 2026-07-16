@@ -11,7 +11,7 @@ from typing import List, Tuple
 import pandas as pd
 import streamlit as st
 
-from fai_excel_extractor import default_output_path, export_workbook, extract_workbook
+from fai_excel_extractor import default_multi_output_path, export_workbook, extract_workbooks
 
 
 DEFAULT_DIR = Path(__file__).resolve().parent
@@ -30,14 +30,16 @@ def records_to_frame(records: List[dict], include_source_sheet: bool) -> pd.Data
     df = pd.DataFrame(records)
     if df.empty:
         return df
-    if not include_source_sheet and "source_sheet" in df.columns:
-        df = df.drop(columns=["source_sheet"])
+    if not include_source_sheet:
+        df = df.drop(columns=[col for col in ["source_sheet", "source_file"] if col in df.columns])
     else:
-        df = df.rename(columns={"source_sheet": "Source sheet"})
+        df = df.rename(columns={"source_sheet": "Source sheet", "source_file": "Source file"})
     base = ["Date ", "Sampling process", "Sampling time", "Sampling line#/Machine#", "FAI"]
     samples = sorted([c for c in df.columns if c.startswith("Sample ")], key=lambda name: int(name.split()[-1]))
-    extra = [c for c in df.columns if c not in base + samples + ["Source sheet"]]
+    extra = [c for c in df.columns if c not in base + samples + ["Source file", "Source sheet"]]
     ordered = base + samples + extra
+    if include_source_sheet and "Source file" in df.columns:
+        ordered.append("Source file")
     if include_source_sheet and "Source sheet" in df.columns:
         ordered.append("Source sheet")
     return df[[c for c in ordered if c in df.columns]]
@@ -55,9 +57,9 @@ def workbook_bytes(records: List[dict], include_source_sheet: bool) -> bytes:
 
 
 def load_local(path_text: str, prefix_fai: bool) -> Tuple[List[dict], dict, Path]:
-    input_path = Path(path_text).expanduser().resolve()
-    records, sheet_counts = extract_workbook(input_path, prefix_fai=prefix_fai)
-    return records, sheet_counts, default_output_path(input_path)
+    input_paths = [Path(part.strip()).expanduser().resolve() for part in path_text.split(";") if part.strip()]
+    records, sheet_counts = extract_workbooks(input_paths, prefix_fai=prefix_fai)
+    return records, sheet_counts, default_multi_output_path(input_paths)
 
 
 def main() -> None:
@@ -69,9 +71,9 @@ def main() -> None:
         st.header("输入")
         mode = st.radio("文件来源", ["上传文件", "本地路径"], horizontal=True)
         prefix_fai = st.checkbox("FAI 值加前缀（4 -> FAI4）", value=False)
-        include_source_sheet = st.checkbox("输出 Source sheet 追溯列", value=False)
-        local_path = st.text_input("本地 Excel 路径", str(DEFAULT_DIR / "input.xlsx"), disabled=mode != "本地路径")
-        uploaded_file = st.file_uploader("上传 .xlsx/.xlsm", type=["xlsx", "xlsm"], disabled=mode != "上传文件")
+        include_source_sheet = st.checkbox("输出 Source file / Source sheet 追溯列", value=False)
+        local_path = st.text_input("本地 Excel 路径（多个文件用 ; 分隔）", str(DEFAULT_DIR / "input.xlsx"), disabled=mode != "本地路径")
+        uploaded_files = st.file_uploader("上传一个或多个 .xlsx/.xlsm", type=["xlsx", "xlsm"], accept_multiple_files=True, disabled=mode != "上传文件")
         run = st.button("开始提取", type="primary")
 
     if not run:
@@ -80,12 +82,22 @@ def main() -> None:
 
     try:
         if mode == "上传文件":
-            if uploaded_file is None:
+            if not uploaded_files:
                 st.warning("请先上传 Excel 文件。")
                 return
-            input_path = save_uploaded_file(uploaded_file)
-            records, sheet_counts = extract_workbook(input_path, prefix_fai=prefix_fai)
-            download_name = Path(uploaded_file.name).stem + "_extracted.xlsx"
+            input_paths = []
+            display_names = []
+            for uploaded_file in uploaded_files:
+                input_paths.append(save_uploaded_file(uploaded_file))
+                display_names.append(uploaded_file.name)
+            records, sheet_counts = extract_workbooks(input_paths, prefix_fai=prefix_fai)
+            for record in records:
+                temp_name = record.get("source_file")
+                for temp_path, original_name in zip(input_paths, display_names):
+                    if temp_path.name == temp_name:
+                        record["source_file"] = original_name
+                        break
+            download_name = "FAI_IPQC_Excel_Extracted.xlsx" if len(uploaded_files) > 1 else Path(uploaded_files[0].name).stem + "_extracted.xlsx"
         else:
             records, sheet_counts, output_path = load_local(local_path, prefix_fai=prefix_fai)
             download_name = output_path.name
