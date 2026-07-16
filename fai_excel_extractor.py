@@ -286,6 +286,27 @@ def find_row_containing(rows: Dict[int, Dict[int, Any]], keywords: Sequence[str]
     return None
 
 
+def find_label_row(rows: Dict[int, Dict[int, Any]], labels: Sequence[str]) -> Optional[int]:
+    for row_num in sorted(rows):
+        for value in rows[row_num].values():
+            label = normalize_label(value)
+            if any(expected in label for expected in labels):
+                return row_num
+    return None
+
+
+def find_header_value(rows: Dict[int, Dict[int, Any]], merge_map: Dict[Tuple[int, int], Tuple[int, int]], labels: Sequence[str], max_row: int = 8) -> str:
+    max_col = max((col for row in rows.values() for col in row.keys()), default=0)
+    for row in range(1, max_row + 1):
+        for col in range(1, max_col + 1):
+            if any(label in normalize_label(value_at(rows, row, col, merge_map)) for label in labels):
+                for next_col in range(col + 1, min(max_col, col + 4) + 1):
+                    value = clean_text(value_at(rows, row, next_col, merge_map))
+                    if value:
+                        return value
+    return ""
+
+
 def find_dimension_header(rows: Dict[int, Dict[int, Any]]) -> Optional[Tuple[int, int]]:
     for row_num in sorted(rows):
         for col, value in rows[row_num].items():
@@ -322,8 +343,8 @@ def build_sampling_groups(
 
 def extract_sheet_records(sheet_name: str, rows: Dict[int, Dict[int, Any]], merges: Sequence[Tuple[int, int, int, int]], prefix_fai: bool = False) -> List[Dict[str, Any]]:
     dim_header = find_dimension_header(rows)
-    date_row = find_row_containing(rows, ["检验", "日期"])
-    time_row = find_row_containing(rows, ["检验", "时间"])
+    date_row = find_row_containing(rows, ["检验", "日期"]) or find_label_row(rows, ["出炉日期", "日期(yymmdd)", "日期"])
+    time_row = find_row_containing(rows, ["检验", "时间"]) or find_label_row(rows, ["出炉时间", "时间(hh:mm)", "时间"])
     if dim_header is None or date_row is None or time_row is None:
         return []
 
@@ -338,9 +359,13 @@ def extract_sheet_records(sheet_name: str, rows: Dict[int, Dict[int, Any]], merg
     process = ""
     if "工序" in normalize_label(value_at(rows, 4, 7, merge_map)):
         process = clean_text(value_at(rows, 4, 8, merge_map))
+    if not process:
+        process = find_header_value(rows, merge_map, ["工序"])
     machine = ""
     if "机台" in normalize_label(value_at(rows, 4, 9, merge_map)):
         machine = clean_text(value_at(rows, 4, 10, merge_map))
+    if not machine:
+        machine = find_header_value(rows, merge_map, ["机台", "机台号"])
 
     records: List[Dict[str, Any]] = []
     for row_num in sorted(r for r in rows.keys() if r > header_row):
