@@ -30,15 +30,18 @@ def records_to_frame(records: List[dict], include_source_sheet: bool) -> pd.Data
     df = pd.DataFrame(records)
     if df.empty:
         return df
-    if not include_source_sheet:
-        df = df.drop(columns=[col for col in ["source_sheet", "source_file"] if col in df.columns])
-    else:
-        df = df.rename(columns={"source_sheet": "Source sheet", "source_file": "Source file"})
+    source_count = df["source_file"].dropna().astype(str).nunique() if "source_file" in df.columns else 0
+    include_source_file = include_source_sheet or source_count > 1
+    if not include_source_file and "source_file" in df.columns:
+        df = df.drop(columns=["source_file"])
+    if not include_source_sheet and "source_sheet" in df.columns:
+        df = df.drop(columns=["source_sheet"])
+    df = df.rename(columns={"source_sheet": "Source sheet", "source_file": "Source file"})
     base = ["Date ", "Sampling process", "Sampling time", "Sampling line#/Machine#", "FAI"]
     samples = sorted([c for c in df.columns if c.startswith("Sample ")], key=lambda name: int(name.split()[-1]))
     extra = [c for c in df.columns if c not in base + samples + ["Source file", "Source sheet"]]
     ordered = base + samples + extra
-    if include_source_sheet and "Source file" in df.columns:
+    if include_source_file and "Source file" in df.columns:
         ordered.append("Source file")
     if include_source_sheet and "Source sheet" in df.columns:
         ordered.append("Source sheet")
@@ -71,7 +74,7 @@ def main() -> None:
         st.header("输入")
         mode = st.radio("文件来源", ["上传文件", "本地路径"], horizontal=True)
         prefix_fai = st.checkbox("FAI 值加前缀（4 -> FAI4）", value=False)
-        include_source_sheet = st.checkbox("输出 Source file / Source sheet 追溯列", value=False)
+        include_source_sheet = st.checkbox("输出 Source file / Source sheet 追溯列", value=True)
         local_path = st.text_input("本地 Excel 路径（多个文件用 ; 分隔）", str(DEFAULT_DIR / "input.xlsx"), disabled=mode != "本地路径")
         uploaded_files = st.file_uploader("上传一个或多个 .xlsx/.xlsm", type=["xlsx", "xlsm"], accept_multiple_files=True, disabled=mode != "上传文件")
         run = st.button("开始提取", type="primary")

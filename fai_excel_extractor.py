@@ -455,8 +455,11 @@ def export_workbook(records: Sequence[Dict[str, Any]], output_path: Path, includ
                 max_samples = max(max_samples, int(match.group(1)))
     columns = list(OUTPUT_BASE_COLUMNS)
     columns.extend("Sample %d" % idx for idx in range(1, max(10, max_samples) + 1))
-    if include_source_sheet:
+    source_files = {clean_text(record.get("source_file")) for record in records if clean_text(record.get("source_file"))}
+    include_source_file = include_source_sheet or len(source_files) > 1
+    if include_source_file:
         columns.append("Source file")
+    if include_source_sheet:
         columns.append("Source sheet")
 
     header_fill = PatternFill("solid", fgColor="D9EAF7")

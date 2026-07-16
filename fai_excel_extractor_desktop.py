@@ -18,7 +18,7 @@ from fai_excel_extractor import default_multi_output_path, diagnose_workbook, ex
 
 
 APP_TITLE = "FAI / IPQC Excel Extractor"
-APP_VERSION = "1.0.3"
+APP_VERSION = "1.0.4"
 BASE_COLUMNS = ["Date ", "Sampling process", "Sampling time", "Sampling line#/Machine#", "FAI"]
 PREVIEW_LIMIT = 300
 
@@ -109,7 +109,7 @@ class ExtractorApp:
         self.input_var = StringVar()
         self.output_var = StringVar()
         self.prefix_var = BooleanVar(value=False)
-        self.source_sheet_var = BooleanVar(value=False)
+        self.source_sheet_var = BooleanVar(value=True)
         self.date_from_var = StringVar()
         self.date_to_var = StringVar()
         self.time_from_var = StringVar()
@@ -436,8 +436,10 @@ class ExtractorApp:
     def _refresh_preview(self) -> None:
         records = self.filtered_records
         columns = BASE_COLUMNS + sample_columns(records)
-        if self.source_sheet_var.get():
+        source_files = {clean_text(record.get("source_file")) for record in records if clean_text(record.get("source_file"))}
+        if self.source_sheet_var.get() or len(source_files) > 1:
             columns.append("Source file")
+        if self.source_sheet_var.get():
             columns.append("Source sheet")
         self.tree.delete(*self.tree.get_children())
         self.tree["columns"] = columns
