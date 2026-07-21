@@ -9,7 +9,9 @@
 - 自动跳过结果为 `OK` / `NG` / `/` 等判定或占位内容的行。
 - 如果原 Excel 的 `G4` 包含 `工序`，提取 `H4` 到 `Sampling process`。
 - 如果原 Excel 的 `I4` 包含 `机台`，提取 `J4` 到 `Sampling line#/Machine#`。
-- 输出列与样例保持一致：`Date `、`Sampling process`、`Sampling time`、`Sampling line#/Machine#`、`FAI`、`Sample 1` ...。
+- 如果原 Excel 中存在 `炉号` 行，会按每个日期/时间采样组提取对应炉号到 `Furnace No.`。
+- 输出列：`Date `、`Sampling process`、`Sampling time`、`Sampling line#/Machine#`、`Furnace No.`、`FAI`、`Sample 1` ...。
+- 导出文件会额外生成 `CPK summary` 工作表：按 Source/工序/机台/FAI 汇总样本，计算 CPK；当 CPK < 1.33 时，自动按双边公差方式给出 `Proposed Lower Tol = -Proposed Upper Tol`，并用对称上下限重新计算 CPK。
 
 ## 运行环境
 

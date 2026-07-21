@@ -18,8 +18,8 @@ from fai_excel_extractor import default_multi_output_path, diagnose_workbook, ex
 
 
 APP_TITLE = "FAI / IPQC Excel Extractor"
-APP_VERSION = "1.0.4"
-BASE_COLUMNS = ["Date ", "Sampling process", "Sampling time", "Sampling line#/Machine#", "FAI"]
+APP_VERSION = "1.0.5"
+BASE_COLUMNS = ["Date ", "Sampling process", "Sampling time", "Sampling line#/Machine#", "Furnace No.", "FAI"]
 PREVIEW_LIMIT = 300
 
 

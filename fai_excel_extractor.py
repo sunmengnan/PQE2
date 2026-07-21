@@ -8,6 +8,7 @@ directly so the result does not depend on Excel formula cache recalculation.
 from __future__ import annotations
 
 import argparse
+import math
 import re
 import sys
 from dataclasses import dataclass
@@ -25,7 +26,9 @@ from openpyxl.utils import get_column_letter
 NS_MAIN = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
 NS_REL = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
 
-OUTPUT_BASE_COLUMNS = ["Date ", "Sampling process", "Sampling time", "Sampling line#/Machine#", "FAI"]
+OUTPUT_BASE_COLUMNS = ["Date ", "Sampling process", "Sampling time", "Sampling line#/Machine#", "Furnace No.", "FAI"]
+CPK_REQUIREMENT = 1.33
+METADATA_PREFIX = "__"
 
 
 def col_to_num(col: str) -> int:
@@ -41,6 +44,22 @@ def clean_text(value: Any) -> str:
     if isinstance(value, float) and value.is_integer():
         return str(int(value))
     return str(value).strip()
+
+
+def numeric_value(value: Any) -> Optional[float]:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        number = float(value)
+        return number if math.isfinite(number) else None
+    text = clean_text(value).replace(",", "")
+    if not text:
+        return None
+    try:
+        number = float(text)
+    except ValueError:
+        return None
+    return number if math.isfinite(number) else None
 
 
 def normalize_label(value: Any) -> str:
@@ -315,6 +334,33 @@ def find_dimension_header(rows: Dict[int, Dict[int, Any]]) -> Optional[Tuple[int
     return None
 
 
+def find_spec_columns(
+    rows: Dict[int, Dict[int, Any]],
+    header_row: int,
+    merge_map: Dict[Tuple[int, int], Tuple[int, int]],
+) -> Dict[str, int]:
+    max_col = max((col for row in rows.values() for col in row.keys()), default=0)
+    labels = {
+        "Nominal": ("标准值",),
+        "Upper tolerance": ("上公差",),
+        "Lower tolerance": ("下公差",),
+        "LSL": ("LSL",),
+        "USL": ("USL",),
+        "Limit LSL": ("LIMITLSL", "LIMIT_LSL"),
+        "Limit USL": ("LIMITUSL", "LIMIT_USL"),
+    }
+    spec_cols: Dict[str, int] = {}
+    for row in (header_row, header_row + 1):
+        for col in range(1, max_col + 1):
+            label = normalize_label(value_at(rows, row, col, merge_map)).upper()
+            if not label:
+                continue
+            for key, expected_labels in labels.items():
+                if key not in spec_cols and any(expected in label for expected in expected_labels):
+                    spec_cols[key] = col
+    return spec_cols
+
+
 def build_sampling_groups(
     rows: Dict[int, Dict[int, Any]],
     date_row: int,
@@ -345,16 +391,21 @@ def extract_sheet_records(sheet_name: str, rows: Dict[int, Dict[int, Any]], merg
     dim_header = find_dimension_header(rows)
     date_row = find_row_containing(rows, ["检验", "日期"]) or find_label_row(rows, ["出炉日期", "日期(yymmdd)", "日期"])
     time_row = find_row_containing(rows, ["检验", "时间"]) or find_label_row(rows, ["出炉时间", "时间(hh:mm)", "时间"])
+    furnace_row = find_label_row(rows, ["炉号"])
     if dim_header is None or date_row is None or time_row is None:
         return []
 
     header_row, fai_col = dim_header
     rows_of_interest = set([4, date_row, time_row])
+    if furnace_row is not None:
+        rows_of_interest.add(furnace_row)
     rows_of_interest.update(r for r in rows.keys() if r >= header_row)
     merge_map = merged_lookup(merges, rows_of_interest)
     groups = build_sampling_groups(rows, date_row, time_row, merge_map)
     if not groups:
         return []
+
+    spec_cols = find_spec_columns(rows, header_row, merge_map)
 
     process = ""
     if "工序" in normalize_label(value_at(rows, 4, 7, merge_map)):
@@ -388,8 +439,13 @@ def extract_sheet_records(sheet_name: str, rows: Dict[int, Dict[int, Any]], merg
                 "Sampling process": process,
                 "Sampling time": excel_time_fraction(group.sample_time),
                 "Sampling line#/Machine#": machine,
+                "Furnace No.": clean_text(value_at(rows, furnace_row, group.columns[0], merge_map)) if furnace_row is not None else "",
                 "FAI": display_fai(raw_fai, prefix_fai=prefix_fai),
             }
+            for spec_name, spec_col in spec_cols.items():
+                spec_value = numeric_value(value_at(rows, row_num, spec_col, merge_map))
+                if spec_value is not None:
+                    record[METADATA_PREFIX + spec_name] = spec_value
             for idx, sample in enumerate(samples, start=1):
                 record["Sample %d" % idx] = sample
             records.append(record)
@@ -442,6 +498,177 @@ def diagnose_workbook(path: Path) -> List[str]:
     return messages
 
 
+def sample_values(record: Dict[str, Any]) -> List[float]:
+    values: List[float] = []
+    for key, value in record.items():
+        if not key.startswith("Sample "):
+            continue
+        number = numeric_value(value)
+        if number is not None:
+            values.append(number)
+    return values
+
+
+def sample_stdev(values: Sequence[float]) -> Optional[float]:
+    if len(values) < 2:
+        return None
+    avg = sum(values) / len(values)
+    variance = sum((value - avg) ** 2 for value in values) / (len(values) - 1)
+    return math.sqrt(variance)
+
+
+def round_number(value: Optional[float], digits: int = 6) -> Any:
+    if value is None:
+        return ""
+    if math.isinf(value):
+        return "NA"
+    return round(value, digits)
+
+
+def calculate_cpk(mean: float, stdev: Optional[float], lsl: Optional[float], usl: Optional[float]) -> Tuple[Optional[float], Optional[float], Optional[float]]:
+    if stdev is None:
+        return None, None, None
+    if stdev == 0:
+        ucpk = math.inf if usl is None or mean <= usl else -math.inf
+        lcpk = math.inf if lsl is None or mean >= lsl else -math.inf
+    else:
+        ucpk = None if usl is None else (usl - mean) / (3 * stdev)
+        lcpk = None if lsl is None else (mean - lsl) / (3 * stdev)
+    if ucpk is None and lcpk is None:
+        cpk = None
+    elif ucpk is None:
+        cpk = lcpk
+    elif lcpk is None:
+        cpk = ucpk
+    else:
+        cpk = min(ucpk, lcpk)
+    return ucpk, lcpk, cpk
+
+
+def first_numeric(records: Sequence[Dict[str, Any]], key: str) -> Optional[float]:
+    for record in records:
+        number = numeric_value(record.get(key))
+        if number is not None:
+            return number
+    return None
+
+
+def build_cpk_summary(records: Sequence[Dict[str, Any]], requirement: float = CPK_REQUIREMENT) -> List[Dict[str, Any]]:
+    groups: Dict[Tuple[Any, ...], List[Dict[str, Any]]] = {}
+    for record in records:
+        if not sample_values(record):
+            continue
+        key = (
+            clean_text(record.get("source_file")),
+            clean_text(record.get("source_sheet")),
+            clean_text(record.get("Sampling process")),
+            clean_text(record.get("Sampling line#/Machine#")),
+            clean_text(record.get("FAI")),
+        )
+        groups.setdefault(key, []).append(record)
+
+    summary: List[Dict[str, Any]] = []
+    for key in sorted(groups.keys(), key=lambda item: [natural_part(part) for part in item]):
+        group_records = groups[key]
+        values = [value for record in group_records for value in sample_values(record)]
+        if len(values) < 2:
+            continue
+        mean = sum(values) / len(values)
+        stdev = sample_stdev(values)
+        nominal = first_numeric(group_records, METADATA_PREFIX + "Nominal")
+        lsl = first_numeric(group_records, METADATA_PREFIX + "Limit LSL")
+        usl = first_numeric(group_records, METADATA_PREFIX + "Limit USL")
+        if lsl is None:
+            lsl = first_numeric(group_records, METADATA_PREFIX + "LSL")
+        if usl is None:
+            usl = first_numeric(group_records, METADATA_PREFIX + "USL")
+        if nominal is None and lsl is not None and usl is not None:
+            nominal = (lsl + usl) / 2
+        ucpk, lcpk, cpk = calculate_cpk(mean, stdev, lsl, usl)
+        cpk_failed = cpk is not None and not math.isinf(cpk) and cpk < requirement
+
+        proposed_tol: Optional[float] = None
+        proposed_lsl: Optional[float] = None
+        proposed_usl: Optional[float] = None
+        proposed_ucpk: Optional[float] = None
+        proposed_lcpk: Optional[float] = None
+        proposed_cpk: Optional[float] = None
+        if cpk_failed and nominal is not None and stdev is not None:
+            proposed_tol = abs(mean - nominal) if stdev == 0 else requirement * 3 * stdev + abs(mean - nominal)
+            proposed_lsl = nominal - proposed_tol
+            proposed_usl = nominal + proposed_tol
+            proposed_ucpk, proposed_lcpk, proposed_cpk = calculate_cpk(mean, stdev, proposed_lsl, proposed_usl)
+
+        source_file, source_sheet, process, machine, fai = key
+        summary.append(
+            {
+                "Source file": source_file,
+                "Source sheet": source_sheet,
+                "Sampling process": process,
+                "Sampling line#/Machine#": machine,
+                "FAI": fai,
+                "Nominal": round_number(nominal),
+                "LSL": round_number(lsl),
+                "USL": round_number(usl),
+                "Count": len(values),
+                "Average": round_number(mean),
+                "StdDev": round_number(stdev),
+                "Min": round_number(min(values)),
+                "Max": round_number(max(values)),
+                "UCPK": round_number(ucpk, 3),
+                "LCPK": round_number(lcpk, 3),
+                "CPK": round_number(cpk, 3),
+                "CPK requirement": requirement,
+                "Status": "NG" if cpk_failed else "OK",
+                "Proposed Lower Tol": round_number(-proposed_tol if proposed_tol is not None else None),
+                "Proposed Upper Tol": round_number(proposed_tol),
+                "Proposed LSL": round_number(proposed_lsl),
+                "Proposed USL": round_number(proposed_usl),
+                "Recalc UCPK": round_number(proposed_ucpk, 3),
+                "Recalc LCPK": round_number(proposed_lcpk, 3),
+                "Recalc CPK": round_number(proposed_cpk, 3),
+            }
+        )
+    return summary
+
+
+def natural_part(value: Any) -> List[Any]:
+    text = clean_text(value)
+    return [int(part) if part.isdigit() else part.lower() for part in re.split(r"(\d+)", text)]
+
+
+def write_cpk_summary_sheet(wb: Workbook, records: Sequence[Dict[str, Any]]) -> None:
+    summary = build_cpk_summary(records)
+    if not summary:
+        return
+    ws = wb.create_sheet("CPK summary")
+    columns = list(summary[0].keys())
+    header_fill = PatternFill("solid", fgColor="FCE4D6")
+    fail_fill = PatternFill("solid", fgColor="FFC7CE")
+    ok_fill = PatternFill("solid", fgColor="C6EFCE")
+    header_font = Font(name="Arial", bold=True)
+    body_font = Font(name="Arial")
+    center = Alignment(horizontal="center", vertical="center")
+    for col_idx, header in enumerate(columns, start=1):
+        cell = ws.cell(1, col_idx, header)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = center
+    for row_idx, row in enumerate(summary, start=2):
+        row_fill = fail_fill if row.get("Status") == "NG" else ok_fill
+        for col_idx, header in enumerate(columns, start=1):
+            cell = ws.cell(row_idx, col_idx, row.get(header, ""))
+            cell.font = body_font
+            cell.alignment = center
+            if header == "Status":
+                cell.fill = row_fill
+    for col_idx, header in enumerate(columns, start=1):
+        values = [clean_text(ws.cell(row, col_idx).value) for row in range(1, min(ws.max_row, 200) + 1)]
+        width = max([len(header)] + [len(v) for v in values if v]) + 2
+        ws.column_dimensions[get_column_letter(col_idx)].width = min(max(width, 12), 26)
+    ws.freeze_panes = "A2"
+
+
 def export_workbook(records: Sequence[Dict[str, Any]], output_path: Path, include_source_sheet: bool = False) -> None:
     wb = Workbook()
     ws = wb.active
@@ -489,6 +716,7 @@ def export_workbook(records: Sequence[Dict[str, Any]], output_path: Path, includ
         width = max([len(header)] + [len(v) for v in values if v]) + 2
         ws.column_dimensions[get_column_letter(col_idx)].width = min(max(width, 12), 32)
     ws.freeze_panes = "A2"
+    write_cpk_summary_sheet(wb, records)
     wb.save(output_path)
 
 
