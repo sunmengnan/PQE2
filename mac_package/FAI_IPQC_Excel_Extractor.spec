@@ -1,6 +1,12 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import os
+import re
+
 from PyInstaller.utils.hooks import collect_all, collect_submodules
+
+with open(os.path.join(SPECPATH, '..', 'fai_excel_extractor_desktop.py'), encoding='utf-8') as fh:
+    app_version = re.search(r'^APP_VERSION = "([^"]+)"', fh.read(), re.M).group(1)
 
 openpyxl_datas, openpyxl_binaries, openpyxl_hidden = collect_all('openpyxl')
 
@@ -66,6 +72,7 @@ app = BUNDLE(
     coll,
     name='FAI IPQC Excel Extractor.app',
     icon=None,
+    version=app_version,
     bundle_identifier='com.nordbo.fai-ipqc-excel-extractor',
     info_plist={
         'CFBundleDisplayName': 'FAI IPQC Excel Extractor',

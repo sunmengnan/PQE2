@@ -14,11 +14,11 @@ from tkinter import END, EXTENDED, BooleanVar, Listbox, StringVar, Tk, filedialo
 import tkinter.font as tkfont
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from fai_excel_extractor import default_multi_output_path, diagnose_workbook, export_workbook, extract_workbooks
+from fai_excel_extractor import default_multi_output_path, diagnose_workbook, export_workbook, extract_workbooks, sample_columns
 
 
 APP_TITLE = "FAI / IPQC Excel Extractor"
-APP_VERSION = "1.0.5"
+APP_VERSION = "1.0.7"
 BASE_COLUMNS = ["Date ", "Sampling process", "Sampling time", "Sampling line#/Machine#", "Furnace No.", "FAI"]
 PREVIEW_LIMIT = 300
 
@@ -79,18 +79,6 @@ def display_value(value: Any) -> str:
         total = int(round(value * 24 * 3600))
         return "%02d:%02d" % ((total // 3600) % 24, (total % 3600) // 60)
     return clean_text(value)
-
-
-def sample_columns(records: Sequence[Dict[str, Any]]) -> List[str]:
-    max_sample = 0
-    for record in records:
-        for key in record.keys():
-            if key.startswith("Sample "):
-                try:
-                    max_sample = max(max_sample, int(key.split()[-1]))
-                except ValueError:
-                    pass
-    return ["Sample %d" % idx for idx in range(1, max(10, max_sample) + 1)]
 
 
 def natural_sort_key(value: Any) -> List[Any]:

@@ -6,11 +6,13 @@
 - 自动遍历所有 Sheet，识别包含 `尺寸序号`、`检验日期(yymmdd)`、`检验时间(hh:mm)` 的巡检表。
 - 提取每个尺寸/外观行对应日期、时间下的所有工位数据，输出到 `Sample 1`、`Sample 2` ...。
 - 自动跳过无实际测量数据的行。
-- 自动跳过结果为 `OK` / `NG` / `/` 等判定或占位内容的行。
+- 自动跳过结果为 `OK` / `NG` 等判定内容的行。
+- 单元格为 `/`、`-`、`NA` 等占位内容时，只跳过该单元格，同一采样组中其他有效测量值仍会提取。
 - 如果原 Excel 的 `G4` 包含 `工序`，提取 `H4` 到 `Sampling process`。
 - 如果原 Excel 的 `I4` 包含 `机台`，提取 `J4` 到 `Sampling line#/Machine#`。
 - 如果原 Excel 中存在 `炉号` 行，会按每个日期/时间采样组提取对应炉号到 `Furnace No.`。
-- 输出列：`Date `、`Sampling process`、`Sampling time`、`Sampling line#/Machine#`、`Furnace No.`、`FAI`、`Sample 1` ...。
+- 如果原 Excel 中存在 `模穴号` 行，会按每个 Sample 所在的原始列提取对应模穴号，输出到紧跟在该 Sample 后面的 `Cavity N` 列。
+- 输出列：`Date `、`Sampling process`、`Sampling time`、`Sampling line#/Machine#`、`Furnace No.`、`FAI`、`Sample 1`、`Cavity 1`、`Sample 2`、`Cavity 2` ...。
 - 导出文件会额外生成 `CPK summary` 工作表：按 Source/工序/机台/FAI 汇总样本，计算 CPK；当 CPK < 1.33 时，自动按双边公差方式给出 `Proposed Lower Tol = -Proposed Upper Tol`，并用对称上下限重新计算 CPK。
 
 ## 运行环境

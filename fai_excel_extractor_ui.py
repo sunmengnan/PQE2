@@ -38,7 +38,10 @@ def records_to_frame(records: List[dict], include_source_sheet: bool) -> pd.Data
         df = df.drop(columns=["source_sheet"])
     df = df.rename(columns={"source_sheet": "Source sheet", "source_file": "Source file"})
     base = ["Date ", "Sampling process", "Sampling time", "Sampling line#/Machine#", "Furnace No.", "FAI"]
-    samples = sorted([c for c in df.columns if c.startswith("Sample ")], key=lambda name: int(name.split()[-1]))
+    samples = sorted(
+        [c for c in df.columns if c.startswith("Sample ") or c.startswith("Cavity ")],
+        key=lambda name: (int(name.split()[-1]), name.startswith("Cavity ")),
+    )
     extra = [c for c in df.columns if c not in base + samples + ["Source file", "Source sheet"] and not c.startswith("__")]
     ordered = base + samples + extra
     if include_source_file and "Source file" in df.columns:

@@ -275,10 +275,20 @@ def contains_chinese(value: Any) -> bool:
     return bool(re.search(r"[\u4e00-\u9fff]", clean_text(value)))
 
 
+PLACEHOLDER_SAMPLES = ("/", "\\", "-", "--", "NA", "N/A", "NULL", "NONE")
+
+
+def normalize_sample(value: Any) -> str:
+    return clean_text(value).replace(" ", "").replace("\u3000", "").upper()
+
+
+def is_placeholder_sample(value: Any) -> bool:
+    """Return True for "not measured" cells that should be skipped individually."""
+    return normalize_sample(value) in PLACEHOLDER_SAMPLES
+
+
 def is_rejected_sample(value: Any) -> bool:
-    text = clean_text(value)
-    normalized = text.replace(" ", "").replace("\u3000", "").upper()
-    return normalized in ("OK", "NG", "/", "\\", "-", "--", "NA", "N/A", "NULL", "NONE") or contains_chinese(value)
+    return normalize_sample(value) in ("OK", "NG") or is_placeholder_sample(value) or contains_chinese(value)
 
 
 def is_meaningful_sample(value: Any) -> bool:
@@ -392,6 +402,7 @@ def extract_sheet_records(sheet_name: str, rows: Dict[int, Dict[int, Any]], merg
     date_row = find_row_containing(rows, ["检验", "日期"]) or find_label_row(rows, ["出炉日期", "日期(yymmdd)", "日期"])
     time_row = find_row_containing(rows, ["检验", "时间"]) or find_label_row(rows, ["出炉时间", "时间(hh:mm)", "时间"])
     furnace_row = find_label_row(rows, ["炉号"])
+    cavity_row = find_label_row(rows, ["模穴号"])
     if dim_header is None or date_row is None or time_row is None:
         return []
 
@@ -399,6 +410,8 @@ def extract_sheet_records(sheet_name: str, rows: Dict[int, Dict[int, Any]], merg
     rows_of_interest = set([4, date_row, time_row])
     if furnace_row is not None:
         rows_of_interest.add(furnace_row)
+    if cavity_row is not None:
+        rows_of_interest.add(cavity_row)
     rows_of_interest.update(r for r in rows.keys() if r >= header_row)
     merge_map = merged_lookup(merges, rows_of_interest)
     groups = build_sampling_groups(rows, date_row, time_row, merge_map)
@@ -426,11 +439,13 @@ def extract_sheet_records(sheet_name: str, rows: Dict[int, Dict[int, Any]], merg
         if normalize_label(raw_fai) in ("尺寸序号", "判定", "检验员"):
             continue
         for group in groups:
-            raw_samples = [value_at(rows, row_num, col, merge_map) for col in group.columns]
-            filled_samples = [sample for sample in raw_samples if clean_text(sample) != ""]
-            if not filled_samples or any(is_rejected_sample(sample) for sample in filled_samples):
+            # Keep the source column with each sample so its cavity stays aligned after skipping blanks.
+            raw_samples = [(value_at(rows, row_num, col, merge_map), col) for col in group.columns]
+            # Placeholders such as "/" only mark one cell as not measured; OK/NG or text marks a judgment row.
+            filled_samples = [(sample, col) for sample, col in raw_samples if clean_text(sample) != "" and not is_placeholder_sample(sample)]
+            if not filled_samples or any(is_rejected_sample(sample) for sample, _ in filled_samples):
                 continue
-            samples = [sample for sample in filled_samples if is_meaningful_sample(sample)]
+            samples = [(sample, col) for sample, col in filled_samples if is_meaningful_sample(sample)]
             if not samples:
                 continue
             record: Dict[str, Any] = {
@@ -446,8 +461,9 @@ def extract_sheet_records(sheet_name: str, rows: Dict[int, Dict[int, Any]], merg
                 spec_value = numeric_value(value_at(rows, row_num, spec_col, merge_map))
                 if spec_value is not None:
                     record[METADATA_PREFIX + spec_name] = spec_value
-            for idx, sample in enumerate(samples, start=1):
+            for idx, (sample, col) in enumerate(samples, start=1):
                 record["Sample %d" % idx] = sample
+                record["Cavity %d" % idx] = clean_text(value_at(rows, cavity_row, col, merge_map)) if cavity_row is not None else ""
             records.append(record)
     return records
 
@@ -669,19 +685,27 @@ def write_cpk_summary_sheet(wb: Workbook, records: Sequence[Dict[str, Any]]) -> 
     ws.freeze_panes = "A2"
 
 
-def export_workbook(records: Sequence[Dict[str, Any]], output_path: Path, include_source_sheet: bool = False) -> None:
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "IPQC template"
-
+def sample_columns(records: Sequence[Dict[str, Any]]) -> List[str]:
+    """Return Sample N / Cavity N column pairs, at least 10 samples wide."""
     max_samples = 0
     for record in records:
         for key in record.keys():
             match = re.match(r"Sample (\d+)$", key)
             if match:
                 max_samples = max(max_samples, int(match.group(1)))
+    columns: List[str] = []
+    for idx in range(1, max(10, max_samples) + 1):
+        columns.extend(["Sample %d" % idx, "Cavity %d" % idx])
+    return columns
+
+
+def export_workbook(records: Sequence[Dict[str, Any]], output_path: Path, include_source_sheet: bool = False) -> None:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "IPQC template"
+
     columns = list(OUTPUT_BASE_COLUMNS)
-    columns.extend("Sample %d" % idx for idx in range(1, max(10, max_samples) + 1))
+    columns.extend(sample_columns(records))
     source_files = {clean_text(record.get("source_file")) for record in records if clean_text(record.get("source_file"))}
     include_source_file = include_source_sheet or len(source_files) > 1
     if include_source_file:
